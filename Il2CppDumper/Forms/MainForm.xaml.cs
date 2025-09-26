@@ -1,4 +1,4 @@
-﻿using Bluegrams.Application;
+using Bluegrams.Application;
 using Il2CppDumper.Forms;
 using Il2CppDumper.Properties;
 using Il2CppDumper.Utils;
@@ -64,8 +64,8 @@ namespace Il2CppDumper
 
             //Create temp dir
             if (Directory.Exists(tempPath))
-                Directory.Delete(tempPath, true);
-            Directory.CreateDirectory(tempPath);
+                SecureDirectoryOperations.SafeDeleteDirectory(tempPath, true);
+            SecureDirectoryOperations.SafeCreateDirectory(tempPath);
 
             //Get version
             string[] versionArray = Assembly.GetExecutingAssembly().GetName().Version.ToString().Split('.');
@@ -126,14 +126,16 @@ namespace Il2CppDumper
                 Mach_O = "1";
 
             Log("Read config...");
-            if (File.Exists(Path.Combine(basePath, "config.json")))
+            string configPath = Path.Combine(basePath, "config.json");
+            try
             {
-                config = JsonConvert.DeserializeObject<Config>(File.ReadAllText(Path.Combine(basePath, "config.json")));
+                config = SecureConfigLoader.LoadConfig<Config>(configPath);
             }
-            else
+            catch (Exception ex)
             {
+                Log($"Error loading config: {ex.Message}", Brushes.Orange);
                 config = new Config();
-                Log("config.json file does not exist. Using defaults", Brushes.Yellow);
+                Log("Using default configuration", Brushes.Yellow);
             }
 
             Log("Initializing metadata...");
@@ -206,8 +208,16 @@ namespace Il2CppDumper
                         InputOffsetForm form = new InputOffsetForm();
                         if (form.ShowDialog() ?? true)
                         {
-                            confirm = true;
-                            DumpAddr = Convert.ToUInt64(form.ReturnedOffset, 16);
+                            if (InputValidator.TryParseHexAddress(form.ReturnedOffset, out ulong parsedAddr))
+                            {
+                                confirm = true;
+                                DumpAddr = parsedAddr;
+                            }
+                            else
+                            {
+                                Log("Invalid address format entered", Brushes.Orange);
+                                confirm = false;
+                            }
                         }
                     });
 
@@ -256,13 +266,24 @@ namespace Il2CppDumper
                 if (!flag)
                 {
                     Log("ERROR: Can't use auto mode to process file, trying manual mode...", Brushes.Orange);
-                    if (string.IsNullOrEmpty(codeRegistrationTxtBox.Text) || string.IsNullOrEmpty(codeRegistrationTxtBox.Text))
+                    if (string.IsNullOrEmpty(codeRegistrationTxtBox.Text) || string.IsNullOrEmpty(metadataRegistrationTxtBox.Text))
                     {
                         Log("CodeRegistration or MetadataRegistration is empty", Brushes.Orange);
                         return false;
                     }
-                    var codeRegistration = Convert.ToUInt64(codeRegistrationTxtBox.Text, 16);
-                    var metadataRegistration = Convert.ToUInt64(metadataRegistrationTxtBox.Text, 16);
+                    
+                    if (!InputValidator.TryParseHexAddress(codeRegistrationTxtBox.Text, out ulong codeRegistration))
+                    {
+                        Log("Invalid CodeRegistration address format", Brushes.Orange);
+                        return false;
+                    }
+                    
+                    if (!InputValidator.TryParseHexAddress(metadataRegistrationTxtBox.Text, out ulong metadataRegistration))
+                    {
+                        Log("Invalid MetadataRegistration address format", Brushes.Orange);
+                        return false;
+                    }
+                    
                     il2Cpp.Init(codeRegistration, metadataRegistration);
                 }
                 if (il2Cpp.Version >= 27 && il2Cpp.IsDumped)
@@ -342,6 +363,22 @@ namespace Il2CppDumper
         {
             await Task.Factory.StartNew(() =>
             {
+                try
+                {
+                    using (ZipArchive archive = ZipFile.OpenRead(file))
+                    {
+                        // Check archive safety before processing
+                        Log("Validating IPA archive safety...");
+                        ZipUtils.ExtractArchiveSafely(archive, "", out long totalSize);
+                        Log($"IPA archive validation passed. Total size: {totalSize / 1024 / 1024} MB");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"IPA archive validation failed: {ex.Message}", Brushes.Orange);
+                    return;
+                }
+
                 using (ZipArchive archive = ZipFile.OpenRead(file))
                 {
                     var ipaBinaryFolder = archive.Entries.FirstOrDefault(f =>
@@ -364,10 +401,10 @@ namespace Il2CppDumper
                             if (frameworkFile != null)
                                 binaryFile = frameworkFile;
 
-                            Directory.CreateDirectory(outputPath);
+                            SecureDirectoryOperations.SafeCreateDirectory(outputPath);
 
                             string tempPath = Path.Combine(Path.GetTempPath(), "IPADump");
-                            Directory.CreateDirectory(tempPath);
+                            SecureDirectoryOperations.SafeCreateDirectory(tempPath);
 
                             if (Settings.Default.ExtDatChkBox)
                                 ZipUtils.ExtractFile(metadataFile, outputPath);
@@ -418,6 +455,22 @@ namespace Il2CppDumper
 
             await Task.Factory.StartNew(() =>
             {
+                try
+                {
+                    using (ZipArchive archive = ZipFile.OpenRead(file))
+                    {
+                        // Check archive safety before processing
+                        Log("Validating APK archive safety...");
+                        ZipUtils.ExtractArchiveSafely(archive, "", out long totalSize);
+                        Log($"APK archive validation passed. Total size: {totalSize / 1024 / 1024} MB");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"APK archive validation failed: {ex.Message}", Brushes.Orange);
+                    return;
+                }
+
                 using (ZipArchive archive = ZipFile.OpenRead(file))
                 {
                     Log("Extracting files");
@@ -439,7 +492,7 @@ namespace Il2CppDumper
 
                     if (metadataFile != null)
                     {
-                        Directory.CreateDirectory(outputPath);
+                        SecureDirectoryOperations.SafeCreateDirectory(outputPath);
 
                         if (Settings.Default.ExtDatChkBox)
                             ZipUtils.ExtractFile(metadataFile, outputPath);
@@ -461,7 +514,7 @@ namespace Il2CppDumper
                                     Log($"Dumping {abi}", Brushes.PaleTurquoise);
                                     string archPath = Path.Combine(outputPath, abi);
 
-                                    Directory.CreateDirectory(archPath);
+                                    SecureDirectoryOperations.SafeCreateDirectory(archPath);
                                     if (Settings.Default.ExtBinaryChkBox)
                                         ZipUtils.ExtractFile(entry, archPath);
                                     ZipUtils.ExtractFile(entry, tempPath);
@@ -482,6 +535,21 @@ namespace Il2CppDumper
         {
             await Task.Factory.StartNew(() =>
             {
+                try
+                {
+                    using (ZipArchive archive = ZipFile.OpenRead(file))
+                    {
+                        // Check archive safety before processing
+                        Log("Validating split APK archive safety...");
+                        ZipUtils.ExtractArchiveSafely(archive, "", out long totalSize);
+                        Log($"Split APK archive validation passed. Total size: {totalSize / 1024 / 1024} MB");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"Split APK archive validation failed: {ex.Message}", Brushes.Orange);
+                    return;
+                }
                 bool dumpArm64 = true, dumpArmv7 = true, dumpx86 = true, dumpx86_64 = true;
                 int archIndex = Settings.Default.AndroArch;
                 if (archIndex != 0)
@@ -521,7 +589,7 @@ namespace Il2CppDumper
                                 {
                                     Log($"Found global-metadata.dat from {entryApks.FullName}. Extracting", Brushes.Chartreuse);
                                     metadataFound = true;
-                                    Directory.CreateDirectory(outputPath);
+                                    SecureDirectoryOperations.SafeCreateDirectory(outputPath);
 
                                     if (Settings.Default.ExtDatChkBox)
                                         ZipUtils.ExtractFile(metadataFile, outputPath);
@@ -556,7 +624,7 @@ namespace Il2CppDumper
                                     }
                                     else
                                     {
-                                        Directory.CreateDirectory(outputPath);
+                                        SecureDirectoryOperations.SafeCreateDirectory(outputPath);
 
                                         foreach (var entry in entryBase.Entries)
                                         {
@@ -565,7 +633,7 @@ namespace Il2CppDumper
                                                 Log($"Found libil2cpp.so from {entry.FullName}. Dumping", Brushes.Chartreuse);
                                                 string archPath = Path.Combine(outputPath, abi);
 
-                                                Directory.CreateDirectory(archPath);
+                                                SecureDirectoryOperations.SafeCreateDirectory(archPath);
                                                 if (Settings.Default.ExtBinaryChkBox)
                                                     ZipUtils.ExtractFile(entry, archPath);
                                                 ZipUtils.ExtractFile(entry, tempPath);
@@ -628,38 +696,60 @@ namespace Il2CppDumper
         #region Check for update
         private async void CheckUpdate()
         {
-            await Task.Factory.StartNew(() =>
+            if (!NetworkInterface.GetIsNetworkAvailable())
             {
-                if (NetworkInterface.GetIsNetworkAvailable() == true)
+                Log("Network not available, skipping update check", Brushes.Yellow);
+                return;
+            }
+
+            try
+            {
+                string remoteVersion = await SecureHttpClient.GetVersionSafelyAsync("https://repo.andnixsh.com/tools/il2cppdumper/version");
+
+                if (!string.IsNullOrEmpty(remoteVersion) && InputValidator.IsValidVersion(remoteVersion))
                 {
-                    try
+                    if (Version.TryParse(appVersion, out Version currentVersion) && 
+                        Version.TryParse(remoteVersion, out Version latestVersion))
                     {
-                        WebClient w = new WebClient();
-                        string remoteVersion = w.DownloadString("https://repo.andnixsh.com/tools/il2cppdumper/version");
-
-                        if (!String.IsNullOrEmpty(remoteVersion))
+                        if (latestVersion > currentVersion)
                         {
-                            Version currentVersion = Version.Parse(appVersion);
-                            Version latestVersion = Version.Parse(remoteVersion);
-
-                            if (latestVersion > currentVersion)
-                            {
-                                Log("A new version is available: " + remoteVersion, Brushes.Lime);
-                                Log("https://github.com/AndnixSH/Il2CppDumper-GUI/releases", Brushes.Lime);
-                            }
+                            Log("A new version is available: " + remoteVersion, Brushes.Lime);
+                            Log("https://github.com/AndnixSH/Il2CppDumper-GUI/releases", Brushes.Lime);
+                        }
+                        else
+                        {
+                            Log("You are using the latest version", Brushes.LightGreen);
                         }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Log("An error checking for update: " + ex.Message, Brushes.Yellow);
+                        Log("Unable to parse version information", Brushes.Yellow);
                     }
                 }
-            });
+            }
+            catch (Exception ex)
+            {
+                Log($"Error checking for updates: {ex.Message}", Brushes.Yellow);
+            }
         }
 
         private void richTextBoxLogs_LinkClicked(object sender, LinkClickedEventArgs e)
         {
-            Process.Start(e.LinkText);
+            if (InputValidator.IsValidUrl(e.LinkText))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo(e.LinkText) { UseShellExecute = true });
+                }
+                catch (Exception ex)
+                {
+                    Log($"Error opening URL: {ex.Message}", Brushes.Orange);
+                }
+            }
+            else
+            {
+                Log("Invalid URL clicked", Brushes.Orange);
+            }
         }
         #endregion
 
@@ -679,18 +769,20 @@ namespace Il2CppDumper
         {
             if (!String.IsNullOrEmpty(text))
             {
-                Debug.WriteLine(text);
+                // Sanitize log message to remove sensitive information
+                string sanitizedText = InputValidator.SanitizeLogMessage(text);
+                Debug.WriteLine(sanitizedText);
 
                 if (!Dispatcher.CheckAccess())
                 {
                     LogBox.Dispatcher.Invoke(() =>
                     {
-                        PrintLog(text, color);
+                        PrintLog(sanitizedText, color);
                     });
                 }
                 else
                 {
-                    PrintLog(text, color);
+                    PrintLog(sanitizedText, color);
                 }
             }
         }
@@ -775,7 +867,22 @@ namespace Il2CppDumper
 
         private void Hyperlink_RequestNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
         {
-            Process.Start(new ProcessStartInfo(e.Uri.ToString()) { UseShellExecute = true });
+            string url = e.Uri.ToString();
+            if (InputValidator.IsValidUrl(url))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                }
+                catch (Exception ex)
+                {
+                    Log($"Error opening URL: {ex.Message}", Brushes.Orange);
+                }
+            }
+            else
+            {
+                Log("Invalid URL in hyperlink", Brushes.Orange);
+            }
         }
 
         private void Window_Closed(object sender, EventArgs e)
@@ -783,7 +890,7 @@ namespace Il2CppDumper
             SaveConfig();
 
             if (Directory.Exists(tempPath))
-                Directory.Delete(tempPath, true);
+                SecureDirectoryOperations.SafeDeleteDirectory(tempPath, true);
         }
 
         private void LogBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -839,8 +946,8 @@ namespace Il2CppDumper
 
             await Task.Factory.StartNew(() =>
             {
-                DirectoryUtils.Delete(tempPath);
-                Directory.CreateDirectory(tempPath);
+                SecureDirectoryOperations.SafeDeleteDirectory(tempPath, true);
+                SecureDirectoryOperations.SafeCreateDirectory(tempPath);
 
                 Dumper(binFile, datFile, outputPath);
             });
@@ -850,7 +957,22 @@ namespace Il2CppDumper
 
         private void openFolderBtn_Click(object sender, RoutedEventArgs e)
         {
-            Process.Start("explorer.exe", outputTxtBox.Text);
+            string path = outputTxtBox.Text;
+            if (InputValidator.IsValidDirectoryPath(path) && Directory.Exists(path))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = false });
+                }
+                catch (Exception ex)
+                {
+                    Log($"Error opening folder: {ex.Message}", Brushes.Orange);
+                }
+            }
+            else
+            {
+                Log("Invalid or non-existent directory path", Brushes.Orange);
+            }
         }
 
         private void selBinFile_Click(object sender, RoutedEventArgs e)
