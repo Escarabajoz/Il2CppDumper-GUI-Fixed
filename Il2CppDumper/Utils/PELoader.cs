@@ -13,6 +13,13 @@ namespace Il2CppDumper
 
         public static PE Load(string fileName)
         {
+            // Validate file size before loading
+            var fileInfo = new FileInfo(fileName);
+            if (fileInfo.Length > 1L * 1024 * 1024 * 1024) // 1GB limit
+            {
+                throw new InvalidOperationException($"PE file is too large ({fileInfo.Length} bytes). Maximum allowed size is 1GB.");
+            }
+            
             var buff = File.ReadAllBytes(fileName);
             using var reader = new BinaryStream(new MemoryStream(buff));
             var dosHeader = reader.ReadClass<DosHeader>();
@@ -52,7 +59,28 @@ namespace Il2CppDumper
                     case 0x60000020:
                     case 0x40000040:
                     case 0xC0000040:
-                        Marshal.Copy(new IntPtr(handle.ToInt64() + section.VirtualAddress), peBuff, (int)section.VirtualAddress, (int)section.VirtualSize);
+                        // Add bounds checking to prevent buffer overflow
+                        if (section.VirtualAddress >= size || section.VirtualSize > size || 
+                            section.VirtualAddress + section.VirtualSize > size)
+                        {
+                            throw new InvalidOperationException($"Section bounds exceed buffer size: VA=0x{section.VirtualAddress:X}, Size=0x{section.VirtualSize:X}, BufferSize=0x{size:X}");
+                        }
+                        
+                        // Additional safety check for source pointer
+                        long sourceAddress = handle.ToInt64() + section.VirtualAddress;
+                        if (sourceAddress < handle.ToInt64() || sourceAddress + section.VirtualSize < sourceAddress)
+                        {
+                            throw new InvalidOperationException("Integer overflow detected in source address calculation");
+                        }
+                        
+                        try
+                        {
+                            Marshal.Copy(new IntPtr(sourceAddress), peBuff, (int)section.VirtualAddress, (int)section.VirtualSize);
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidOperationException($"Memory copy failed for section at VA=0x{section.VirtualAddress:X}: {ex.Message}", ex);
+                        }
                         break;
                 }
             }

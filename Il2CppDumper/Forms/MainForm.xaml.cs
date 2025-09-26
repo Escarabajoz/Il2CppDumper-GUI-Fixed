@@ -11,6 +11,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -126,9 +127,50 @@ namespace Il2CppDumper
                 Mach_O = "1";
 
             Log("Read config...");
-            if (File.Exists(Path.Combine(basePath, "config.json")))
+            string configPath = Path.Combine(basePath, "config.json");
+            if (File.Exists(configPath))
             {
-                config = JsonConvert.DeserializeObject<Config>(File.ReadAllText(Path.Combine(basePath, "config.json")));
+                try
+                {
+                    // Validate config file size
+                    var configFileInfo = new FileInfo(configPath);
+                    if (configFileInfo.Length > 1024 * 1024) // 1MB limit for config
+                    {
+                        Log("Config file is too large. Using defaults.", Brushes.Yellow);
+                        config = new Config();
+                    }
+                    else
+                    {
+                        string configJson = File.ReadAllText(configPath);
+                        
+                        // Configure JsonSerializerSettings for security
+                        var settings = new JsonSerializerSettings
+                        {
+                            TypeNameHandling = TypeNameHandling.None, // Prevent type confusion attacks
+                            MetadataPropertyHandling = MetadataPropertyHandling.Ignore,
+                            MaxDepth = 10 // Prevent deep object graphs
+                        };
+                        
+                        config = JsonConvert.DeserializeObject<Config>(configJson, settings);
+                        
+                        // Validate config object after deserialization
+                        if (config == null)
+                        {
+                            Log("Invalid config file format. Using defaults.", Brushes.Yellow);
+                            config = new Config();
+                        }
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    Log($"Error parsing config file: {ex.Message}. Using defaults.", Brushes.Yellow);
+                    config = new Config();
+                }
+                catch (Exception ex)
+                {
+                    Log($"Error reading config file: {ex.Message}. Using defaults.", Brushes.Yellow);
+                    config = new Config();
+                }
             }
             else
             {
@@ -137,10 +179,33 @@ namespace Il2CppDumper
             }
 
             Log("Initializing metadata...");
+            
+            // Validate metadata file size
+            var metadataFileInfo = new FileInfo(metadataPath);
+            if (metadataFileInfo.Length > 500 * 1024 * 1024) // 500MB limit
+            {
+                Log("Metadata file is too large (>500MB)", Brushes.Red);
+                metadata = null;
+                il2Cpp = null;
+                return false;
+            }
+            
             var metadataBytes = File.ReadAllBytes(metadataPath);
             metadata = new Metadata(new MemoryStream(metadataBytes));
             Log($"Metadata Version: {metadata.Version}");
+            
             Log("Initializing il2cpp file...");
+            
+            // Validate il2cpp file size
+            var il2cppFileInfo = new FileInfo(il2cppPath);
+            if (il2cppFileInfo.Length > 2L * 1024 * 1024 * 1024) // 2GB limit
+            {
+                Log("Il2cpp file is too large (>2GB)", Brushes.Red);
+                metadata = null;
+                il2Cpp = null;
+                return false;
+            }
+            
             var il2cppBytes = File.ReadAllBytes(il2cppPath);
             var il2cppMagic = BitConverter.ToUInt32(il2cppBytes, 0);
             var il2CppMemory = new MemoryStream(il2cppBytes);
@@ -213,15 +278,23 @@ namespace Il2CppDumper
 
                     if (confirm)
                     {
-                        Log("Inputted address: " + DumpAddr.ToString("X"));
-                        if (DumpAddr != 0)
+                        try
                         {
-                            il2Cpp.ImageBase = DumpAddr;
-                            il2Cpp.IsDumped = true;
-                            if (!config.NoRedirectedPointer)
+                            Log("Inputted address: " + DumpAddr.ToString("X"));
+                            if (DumpAddr != 0)
                             {
-                                elf.Reload();
+                                il2Cpp.ImageBase = DumpAddr;
+                                il2Cpp.IsDumped = true;
+                                if (!config.NoRedirectedPointer)
+                                {
+                                    elf.Reload();
+                                }
                             }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"Error processing dump address: {ex.Message}", Brushes.Red);
+                            return false;
                         }
                     }
                     else
@@ -256,14 +329,45 @@ namespace Il2CppDumper
                 if (!flag)
                 {
                     Log("ERROR: Can't use auto mode to process file, trying manual mode...", Brushes.Orange);
-                    if (string.IsNullOrEmpty(codeRegistrationTxtBox.Text) || string.IsNullOrEmpty(codeRegistrationTxtBox.Text))
+                    if (string.IsNullOrEmpty(codeRegistrationTxtBox.Text) || string.IsNullOrEmpty(metadataRegistrationTxtBox.Text))
                     {
                         Log("CodeRegistration or MetadataRegistration is empty", Brushes.Orange);
                         return false;
                     }
-                    var codeRegistration = Convert.ToUInt64(codeRegistrationTxtBox.Text, 16);
-                    var metadataRegistration = Convert.ToUInt64(metadataRegistrationTxtBox.Text, 16);
-                    il2Cpp.Init(codeRegistration, metadataRegistration);
+                    
+                    try
+                    {
+                        // Validate hex format before conversion
+                        string codeRegText = codeRegistrationTxtBox.Text.Trim();
+                        string metadataRegText = metadataRegistrationTxtBox.Text.Trim();
+                        
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(codeRegText, @"^[0-9A-Fa-f]+$") ||
+                            !System.Text.RegularExpressions.Regex.IsMatch(metadataRegText, @"^[0-9A-Fa-f]+$"))
+                        {
+                            Log("Invalid hexadecimal format in registration addresses", Brushes.Orange);
+                            return false;
+                        }
+                        
+                        var codeRegistration = Convert.ToUInt64(codeRegText, 16);
+                        var metadataRegistration = Convert.ToUInt64(metadataRegText, 16);
+                        
+                        il2Cpp.Init(codeRegistration, metadataRegistration);
+                    }
+                    catch (OverflowException)
+                    {
+                        Log("Registration address values are too large", Brushes.Orange);
+                        return false;
+                    }
+                    catch (FormatException)
+                    {
+                        Log("Invalid format in registration addresses", Brushes.Orange);
+                        return false;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Error processing registration addresses: {ex.Message}", Brushes.Orange);
+                        return false;
+                    }
                 }
                 if (il2Cpp.Version >= 27 && il2Cpp.IsDumped)
                 {
@@ -628,38 +732,107 @@ namespace Il2CppDumper
         #region Check for update
         private async void CheckUpdate()
         {
-            await Task.Factory.StartNew(() =>
+            if (!NetworkInterface.GetIsNetworkAvailable())
+                return;
+
+            try
             {
-                if (NetworkInterface.GetIsNetworkAvailable() == true)
+                using (var httpClient = new HttpClient())
                 {
-                    try
+                    // Configure secure HTTP client
+                    httpClient.Timeout = TimeSpan.FromSeconds(10);
+                    httpClient.DefaultRequestHeaders.Add("User-Agent", "Il2CppDumper-GUI/3.0.2");
+                    
+                    // Validate the URL
+                    const string updateUrl = "https://repo.andnixsh.com/tools/il2cppdumper/version";
+                    if (!Uri.TryCreate(updateUrl, UriKind.Absolute, out Uri validUri) || 
+                        validUri.Scheme != Uri.UriSchemeHttps)
                     {
-                        WebClient w = new WebClient();
-                        string remoteVersion = w.DownloadString("https://repo.andnixsh.com/tools/il2cppdumper/version");
+                        Log("Invalid update URL", Brushes.Yellow);
+                        return;
+                    }
 
-                        if (!String.IsNullOrEmpty(remoteVersion))
+                    string remoteVersion = await httpClient.GetStringAsync(validUri);
+                    
+                    // Validate and sanitize the response
+                    if (string.IsNullOrWhiteSpace(remoteVersion))
+                    {
+                        Log("Empty version response from server", Brushes.Yellow);
+                        return;
+                    }
+
+                    // Remove any whitespace and validate format
+                    remoteVersion = remoteVersion.Trim();
+                    if (remoteVersion.Length > 20) // Reasonable version string length
+                    {
+                        Log("Invalid version format received", Brushes.Yellow);
+                        return;
+                    }
+
+                    // Validate version format (should be like "3.0.2")
+                    if (!System.Text.RegularExpressions.Regex.IsMatch(remoteVersion, @"^\d+\.\d+\.\d+$"))
+                    {
+                        Log("Invalid version format received", Brushes.Yellow);
+                        return;
+                    }
+
+                    if (Version.TryParse(appVersion, out Version currentVersion) && 
+                        Version.TryParse(remoteVersion, out Version latestVersion))
+                    {
+                        if (latestVersion > currentVersion)
                         {
-                            Version currentVersion = Version.Parse(appVersion);
-                            Version latestVersion = Version.Parse(remoteVersion);
-
-                            if (latestVersion > currentVersion)
-                            {
-                                Log("A new version is available: " + remoteVersion, Brushes.Lime);
-                                Log("https://github.com/AndnixSH/Il2CppDumper-GUI/releases", Brushes.Lime);
-                            }
+                            Log($"A new version is available: {remoteVersion}", Brushes.Lime);
+                            Log("https://github.com/AndnixSH/Il2CppDumper-GUI/releases", Brushes.Lime);
                         }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Log("An error checking for update: " + ex.Message, Brushes.Yellow);
+                        Log("Error parsing version information", Brushes.Yellow);
                     }
                 }
-            });
+            }
+            catch (HttpRequestException ex)
+            {
+                Log($"Network error checking for update: {ex.Message}", Brushes.Yellow);
+            }
+            catch (TaskCanceledException)
+            {
+                Log("Update check timed out", Brushes.Yellow);
+            }
+            catch (Exception ex)
+            {
+                Log($"Error checking for update: {ex.Message}", Brushes.Yellow);
+            }
         }
 
         private void richTextBoxLogs_LinkClicked(object sender, LinkClickedEventArgs e)
         {
-            Process.Start(e.LinkText);
+            try
+            {
+                string url = e.LinkText?.Trim();
+                if (string.IsNullOrEmpty(url))
+                    return;
+
+                // Validate URL format and protocol
+                if (Uri.TryCreate(url, UriKind.Absolute, out Uri validUri) && 
+                    (validUri.Scheme == Uri.UriSchemeHttp || validUri.Scheme == Uri.UriSchemeHttps))
+                {
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = url,
+                        UseShellExecute = true
+                    };
+                    Process.Start(startInfo);
+                }
+                else
+                {
+                    Log("Invalid URL format", Brushes.Orange);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Error opening URL: {ex.Message}", Brushes.Red);
+            }
         }
         #endregion
 
@@ -742,7 +915,6 @@ namespace Il2CppDumper
         #endregion
 
         #region Window handlers
-        private bool _actionButtonsEnabled;
         internal bool ActionButtonsEnabled
         {
             set
@@ -761,7 +933,7 @@ namespace Il2CppDumper
             }
             get
             {
-                return _actionButtonsEnabled;
+                return startBtn.IsEnabled;
             }
         }
 
@@ -775,7 +947,26 @@ namespace Il2CppDumper
 
         private void Hyperlink_RequestNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
         {
-            Process.Start(new ProcessStartInfo(e.Uri.ToString()) { UseShellExecute = true });
+            try
+            {
+                if (e.Uri != null && (e.Uri.Scheme == Uri.UriSchemeHttp || e.Uri.Scheme == Uri.UriSchemeHttps))
+                {
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = e.Uri.ToString(),
+                        UseShellExecute = true
+                    };
+                    Process.Start(startInfo);
+                }
+                else
+                {
+                    Log("Invalid or unsafe URL", Brushes.Orange);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Error opening URL: {ex.Message}", Brushes.Red);
+            }
         }
 
         private void Window_Closed(object sender, EventArgs e)
@@ -850,7 +1041,49 @@ namespace Il2CppDumper
 
         private void openFolderBtn_Click(object sender, RoutedEventArgs e)
         {
-            Process.Start("explorer.exe", outputTxtBox.Text);
+            try
+            {
+                string outputPath = outputTxtBox.Text?.Trim();
+                if (string.IsNullOrEmpty(outputPath))
+                {
+                    Log("Output path is empty", Brushes.Orange);
+                    return;
+                }
+
+                // Validate path to prevent command injection
+                if (outputPath.Contains("&") || outputPath.Contains("|") || outputPath.Contains(";") || 
+                    outputPath.Contains("&&") || outputPath.Contains("||") || outputPath.Contains(">") || 
+                    outputPath.Contains("<") || outputPath.Contains("^"))
+                {
+                    Log("Invalid characters detected in path", Brushes.Orange);
+                    return;
+                }
+
+                // Ensure the path exists and is a valid directory
+                if (!Directory.Exists(outputPath))
+                {
+                    Log("Output directory does not exist", Brushes.Orange);
+                    return;
+                }
+
+                // Get full path to prevent directory traversal
+                string fullPath = Path.GetFullPath(outputPath);
+                
+                // Use ProcessStartInfo for better security control
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"\"{fullPath}\"",
+                    UseShellExecute = true,
+                    CreateNoWindow = true
+                };
+                
+                Process.Start(startInfo);
+            }
+            catch (Exception ex)
+            {
+                Log($"Error opening folder: {ex.Message}", Brushes.Red);
+            }
         }
 
         private void selBinFile_Click(object sender, RoutedEventArgs e)
@@ -998,13 +1231,35 @@ namespace Il2CppDumper
             foreach (var file in files)
             {
                 string outputPath;
-                if (Settings.Default.AutoSetDir)
+                try
                 {
-                    outputPath = Path.GetDirectoryName(file) + "\\" + Path.GetFileNameWithoutExtension(file) + "_dumped\\";
+                    if (Settings.Default.AutoSetDir)
+                    {
+                        string fileDir = Path.GetDirectoryName(file);
+                        string fileName = Path.GetFileNameWithoutExtension(file);
+                        
+                        // Sanitize filename to prevent path traversal
+                        fileName = string.Join("_", fileName.Split(Path.GetInvalidFileNameChars()));
+                        
+                        outputPath = Path.Combine(fileDir, fileName + "_dumped");
+                        outputPath = Path.GetFullPath(outputPath) + Path.DirectorySeparatorChar;
+                    }
+                    else
+                    {
+                        string fileName = Path.GetFileNameWithoutExtension(file);
+                        
+                        // Sanitize filename to prevent path traversal
+                        fileName = string.Join("_", fileName.Split(Path.GetInvalidFileNameChars()));
+                        
+                        string basePath = outputTxtBox.Text.TrimEnd('\\', '/');
+                        outputPath = Path.Combine(basePath, fileName + "_dumped");
+                        outputPath = Path.GetFullPath(outputPath) + Path.DirectorySeparatorChar;
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    outputPath = outputTxtBox.Text + Path.GetFileNameWithoutExtension(file) + "_dumped\\";
+                    Log($"Error creating output path: {ex.Message}", Brushes.Red);
+                    continue;
                 }
 
                 switch (Path.GetExtension(file))

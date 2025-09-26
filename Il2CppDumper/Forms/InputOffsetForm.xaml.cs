@@ -29,9 +29,51 @@ namespace Il2CppDumper.Forms
 
         private void okBtn_Click(object sender, RoutedEventArgs e)
         {
-            ReturnedOffset = dumpAdrTxtBox.Text;
-            DialogResult = true;
-            Close();
+            try
+            {
+                string offsetText = dumpAdrTxtBox.Text?.Trim();
+                if (string.IsNullOrEmpty(offsetText))
+                {
+                    System.Windows.MessageBox.Show("Please enter a valid hexadecimal address.", "Invalid Input", 
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Validate hexadecimal format
+                if (!IsHexadecimal(offsetText))
+                {
+                    System.Windows.MessageBox.Show("Please enter a valid hexadecimal address (0-9, A-F).", "Invalid Input", 
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Test conversion to ensure it's valid
+                try
+                {
+                    Convert.ToUInt64(offsetText, 16);
+                }
+                catch (OverflowException)
+                {
+                    System.Windows.MessageBox.Show("Address value is too large.", "Invalid Input", 
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                catch (FormatException)
+                {
+                    System.Windows.MessageBox.Show("Invalid hexadecimal format.", "Invalid Input", 
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                ReturnedOffset = offsetText;
+                DialogResult = true;
+                Close();
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"Error processing input: {ex.Message}", "Error", 
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private static readonly Regex HexadecimalRegex = new Regex("^[0-9A-Fa-f]+$");
