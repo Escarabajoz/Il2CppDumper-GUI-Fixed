@@ -1,0 +1,77 @@
+{
+  "SecuritySettings": {
+    "FileOperations": {
+      "MaxConfigFileSize": 1048576,
+      "MaxZipEntrySize": 104857600,
+      "MaxTotalZipSize": 524288000,
+      "MaxZipEntryCount": 10000,
+      "MaxFileNameLength": 255,
+      "AllowedFileExtensions": [".txt", ".json", ".dat", ".so", ".dll", ".exe", ".apk", ".ipa", ".zip", ".xapk", ".apks"]
+    },
+    "NetworkOperations": {
+      "RequestTimeoutSeconds": 10,
+      "RequireHttps": true,
+      "ValidateCertificates": true,
+      "MaxResponseSize": 1024,
+      "AllowedHosts": [
+        "repo.andnixsh.com",
+        "github.com"
+      ]
+    },
+    "DirectoryOperations": {
+      "ProtectedDirectories": [
+        "C:\\Windows",
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/etc",
+        "/var",
+        "/sys",
+        "/proc",
+        "/dev",
+        "/boot"
+      ],
+      "SafeDirectoryNames": [
+        "temp",
+        "tmp",
+        "il2cppdumper",
+        "output",
+        "dump",
+        "extracted",
+        "dumped"
+      ]
+    },
+    "InputValidation": {
+      "MaxHexAddressLength": 16,
+      "MaxLogMessageLength": 500,
+      "MaxVersionStringLength": 20,
+      "SanitizeLogMessages": true,
+      "ValidateAllPaths": true
+    },
+    "ProcessExecution": {
+      "AllowedProcesses": [
+        "explorer.exe",
+        "cmd.exe"
+      ],
+      "ValidateUrls": true,
+      "ValidatePaths": true,
+      "DisableShellExecute": false
+    }
+  },
+  "Logging": {
+    "LogSecurityEvents": true,
+    "LogLevel": "Information",
+    "SanitizeSensitiveData": true,
+    "MaxLogEntryLength": 500
+  },
+  "Compliance": {
+    "EnableCWE22Protection": true,
+    "EnableCWE502Protection": true,
+    "EnableCWE78Protection": true,
+    "EnableCWE20Protection": true,
+    "EnableCWE400Protection": true,
+    "EnableCWE200Protection": true
+  }
+}
