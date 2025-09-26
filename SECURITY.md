@@ -105,4 +105,4 @@ All dependencies are regularly monitored for security updates:
 
 This security policy and the implemented fixes will be updated as new threats are identified and addressed.
 
-Last updated: [Current Date]
+Last updated: [26/9/25]
